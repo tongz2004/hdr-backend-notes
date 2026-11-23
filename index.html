@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HDR VR Backend Notes</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column; summary table first, then one section per problem; chart and tables to column width. */
+:root {
+  --bg: #f7f9fa; --surface: #ffffff; --fg: #14212b; --muted: #526370; --line: #d3dce1; --accent: #0f5f7a;
+  --code-bg: #eaf0f3; --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --on-seg: #0b0b0b;
+  --sans: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif; --mono: "IBM Plex Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #11191e; --surface: #18232a; --fg: #e4ecf0; --muted: #9fb1bc; --line: #30404a; --accent: #74c2dd;
+  --code-bg: #1f2c34; --s1: #3987e5; --s2: #d95926; --s3: #199e70; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #11191e; --surface: #18232a; --fg: #e4ecf0; --muted: #9fb1bc; --line: #30404a; --accent: #74c2dd;
+  --code-bg: #1f2c34; --s1: #3987e5; --s2: #d95926; --s3: #199e70; color-scheme: dark }
+* { box-sizing: border-box }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 400 16px/1.6 var(--sans) }
+main { max-width: 46rem; margin: 0 auto; padding-block: 2.5rem 4rem;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)) }
+h1 { font-size: 2rem; line-height: 1.2; margin: 0 0 .5rem; font-weight: 600; text-wrap: balance }
+h2 { font-size: 1.375rem; line-height: 1.3; margin: 3rem 0 .75rem; padding-top: 1.5rem; border-top: 1px solid var(--line); font-weight: 600; text-wrap: balance }
+h3 { font-size: 1rem; margin: 1.5rem 0 .25rem; font-weight: 600 }
+p { margin: 0 0 1rem } ul { margin: 0 0 1rem; padding-left: 1.25rem } li { margin-bottom: .4rem }
+a { color: var(--accent) } a:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px }
+.meta, .note, figcaption, .readout { color: var(--muted); font-size: .9rem }
+.scroll { overflow-x: auto; margin: 0 0 1rem }
+table { border-collapse: collapse; width: 100%; font-size: .92rem; font-variant-numeric: tabular-nums }
+th, td { text-align: left; vertical-align: top; padding: .5rem .75rem .5rem 0; border-bottom: 1px solid var(--line) }
+th { color: var(--muted); font-weight: 500 } td.n, th.n { text-align: right; white-space: nowrap }
+tr.kept td { font-weight: 600 }
+code { font-family: var(--mono); font-size: .88em; background: var(--code-bg); padding: .1em .3em; border-radius: 3px }
+pre { background: var(--code-bg); padding: .9rem 1rem; overflow-x: auto; font: 400 .82rem/1.55 var(--mono); margin: 0 0 1rem; border-radius: 4px }
+pre code { background: none; padding: 0; font-size: inherit }
+figure { margin: 1rem 0 1.25rem }
+figcaption { margin-bottom: .75rem; color: var(--fg); font-weight: 500; font-size: 1rem }
+.legend { display: flex; flex-wrap: wrap; gap: .25rem 1.25rem; font-size: .9rem; color: var(--muted); margin-bottom: .75rem }
+.legend span { display: inline-flex; align-items: center; gap: .4rem } .legend i { width: 10px; height: 10px; border-radius: 2px }
+.row { display: grid; grid-template-columns: 4rem minmax(0, 1fr); gap: .75rem; align-items: center; margin-bottom: .6rem; font-size: .9rem }
+.track { display: flex; align-items: center; gap: 2px; padding-right: 3.25rem; position: relative }
+.seg { height: 24px; min-width: 2px; font-size: .8rem; line-height: 24px; color: var(--on-seg); padding-left: 0; white-space: nowrap }
+.seg.lab { padding-left: 6px } .track .seg:nth-last-child(2) { border-radius: 0 4px 4px 0 }
+.track b { font-weight: 600; padding-left: 6px; white-space: nowrap }
+.axis { position: relative; height: 1.2rem; margin-left: 4.75rem; margin-right: 3.25rem; border-top: 1px solid var(--line); font-size: .8rem; color: var(--muted) }
+.axis span { position: absolute; top: 2px; transform: translateX(-50%) } .axis span:first-child { transform: none }
+.readout { min-height: 1.5em; margin: .5rem 0 0 }
+</style>
+</head>
+<body>
+<main>
+<h1>HDR VR backend: problems found and fixes</h1>
+<p class="meta">Engineering notes, November 2026. Work was done on a separate copy of the backend; the original code was not modified.</p>
+
+<div class="scroll"><table>
+<thead><tr><th>Problem</th><th>What I changed</th><th>Measured effect</th></tr></thead>
+<tbody>
+<tr><td><a href="#time">Slow response</a></td><td>Keep models loaded; remove the gemma3 pass</td><td>32 s to 6.5 s per question</td></tr>
+<tr><td><a href="#bm25">BM25 built from 5 of 249 chunks</a></td><td>Index every chunk; better tokenizer</td><td>25 to 30 hits out of 52</td></tr>
+<tr><td><a href="#pdf">Poor PDF text extraction</a></td><td>Layout extraction; rebuilt index</td><td>30 to 34 hits, partly from longer context</td></tr>
+<tr><td><a href="#risks">gpt-4o-mini shutdown</a></td><td>Not changed</td><td>January 14, 2027</td></tr>
+</tbody></table></div>
+
+<h2 id="time">1. Response time</h2>
+<figure>
+<figcaption>Average time per spoken question, in seconds</figcaption>
+<div class="legend"><span><i style="background:var(--s1)"></i>Speech to text</span><span><i style="background:var(--s2)"></i>Retrieval and LLM</span><span><i style="background:var(--s3)"></i>Text to speech</span></div>
+<div class="row"><span>Before</span><div class="track">
+<span class="seg lab" tabindex="0" style="background:var(--s1);flex:0 0 56.857%" data-tip="Before, speech to text: 19.9 s (includes gemma3 correction)">19.9</span><span class="seg lab" tabindex="0" style="background:var(--s2);flex:0 0 29.714%" data-tip="Before, retrieval and LLM: 10.4 s">10.4</span><span class="seg" tabindex="0" style="background:var(--s3);flex:0 0 5.286%" data-tip="Before, text to speech: 1.9 s"></span><b>32.2 s</b></div></div>
+<div class="row"><span>After</span><div class="track">
+<span class="seg" tabindex="0" style="background:var(--s1);flex:0 0 1.667%" data-tip="After, speech to text: 0.6 s"></span><span class="seg lab" tabindex="0" style="background:var(--s2);flex:0 0 14.190%" data-tip="After, retrieval and LLM: 5.0 s">5.0</span><span class="seg" tabindex="0" style="background:var(--s3);flex:0 0 2.857%" data-tip="After, text to speech: 1.0 s"></span><b>6.5 s</b></div></div>
+<div class="axis"><span style="left:0">0</span><span style="left:28.571%">10</span><span style="left:57.143%">20</span><span style="left:85.714%">30</span></div>
+<p class="readout" id="readout" aria-live="polite">Hover over or focus a segment for its value.</p>
+</figure>
+<div class="scroll"><table>
+<thead><tr><th>Stage</th><th class="n">Before</th><th class="n">After</th></tr></thead>
+<tbody><tr><td>Speech to text</td><td class="n">19.9 s</td><td class="n">0.6 s</td></tr><tr><td>Retrieval and LLM</td><td class="n">10.4 s</td><td class="n">5.0 s</td></tr><tr><td>Text to speech</td><td class="n">1.9 s</td><td class="n">1.0 s</td></tr><tr class="kept"><td>Total</td><td class="n">32.2 s</td><td class="n">6.5 s</td></tr></tbody></table></div>
+<p class="note">RTX 4070 SUPER (12 GB), Windows 11, DeepSeek-R1 8B in both cases. Before: 2 runs (29.3 and 35.0 s). After: 6 warm runs (5.3 to 8.0 s).</p>
+
+<h3>Whisper was reloaded on every request</h3>
+<p>The speech-to-text step loaded the Whisper turbo model from disk each time. Loading took 5.8 s. I load the model once at startup. This cost does not depend on having a 12 GB card, although the load time will differ on other machines.</p>
+<h3>The gemma3 correction pass competed for GPU memory</h3>
+<p>Each transcript was sent to gemma3 for spelling correction. In Ollama, gemma3 took 2.9 GB and DeepSeek-R1 up to 6.0 GB. Those two should fit in 12 GB, but not together with Whisper. When gemma3 needed loading, the correction took 8.0 s; when it was already resident, 0.5 s. With Whisper and gemma3 both resident, DeepSeek ran 16% on the CPU and the retrieval and LLM step took 29 to 38 s.</p>
+<p>The pass is now off by default. Whisper receives a short list of domain terms (afterloader, Iridium-192, dwell position and others) as its decoding prompt. I have not compared transcription accuracy between the two approaches. A 32 GB RTX 5090 should have room for all three models.</p>
+<h3>Two smaller changes</h3>
+<ul><li>DeepSeek stays loaded between questions (<code>keep_alive=-1</code>).</li><li>The prompt asks for at most four short spoken sentences, since the answer is read aloud.</li></ul>
+
+<h3>Optional: qwen3:8b</h3>
+<p>On 14 questions, the retrieval and LLM step averaged 0.9 s with qwen3:8b (thinking off) and 4.5 s with DeepSeek-R1. In a side-by-side check the answers were broadly similar. This is a small sample without formal scoring. My copy now defaults to qwen3:8b; DeepSeek remains available through a setting.</p>
+
+<h2 id="bm25">2. BM25 retrieval</h2>
+<h3>The index held 5 fixed chunks</h3>
+<p>The knowledge base has 249 chunks. BM25 could see only the 5 closest to a placeholder string, and with <code>k = 5</code> it returned all of them for every question. They were then merged with the vector results, so the LLM received 9.9 chunks on average instead of 5.0.</p>
+<h3>The default tokenizer was too simple</h3>
+<p>LangChain's default splits on whitespace only. Matching was case-sensitive (<code>Remote</code> did not match <code>remote</code>), punctuation stayed attached (<code>Iridium-192,</code> did not match <code>Iridium-192</code>), and stop words were scored.</p>
+<h3>Fix</h3>
+<pre><code>words = re.findall(r"[a-z0-9]+(?:[-.][a-z0-9]+)*", text.lower())
+return [w for w in words if w not in _STOPWORDS]
+
+_bm25 = BM25Retriever.from_documents(
+    list(_vectorstore.docstore._dict.values()),
+    preprocess_func=bm25_tokenize,
+)</code></pre>
+<p>The index is built once and cached. The 0.5/0.5 fusion weights and <code>k = 5</code> are unchanged.</p>
+<div class="scroll"><table>
+<thead><tr><th>Retriever (original index)</th><th class="n">Hits / 52</th><th class="n">Keyword coverage</th><th class="n">Chunks returned</th></tr></thead>
+<tbody>
+<tr><td>Vector search only</td><td class="n">24</td><td class="n">0.538</td><td class="n">5.0</td></tr>
+<tr><td>Original hybrid (5 chunks)</td><td class="n">25</td><td class="n">0.556</td><td class="n">9.9</td></tr>
+<tr><td>All chunks, default tokenizer</td><td class="n">28</td><td class="n">0.592</td><td class="n">9.0</td></tr>
+<tr class="kept"><td>All chunks, new tokenizer</td><td class="n">30</td><td class="n">0.605</td><td class="n">8.5</td></tr>
+</tbody></table></div>
+<p class="note">A question is a hit when the retrieved text contains at least 60% of the keywords in the reference answer. Keyword coverage is the average share. This is a quick check of retrieval, not a RAGAS score and not a measure of answer correctness.</p>
+
+<h2 id="pdf">3. PDF text extraction</h2>
+<p>The StatPearls PDF was printed from a browser (its producer field reads <code>Skia/PDF</code>). pypdf's default plain mode put almost every word on its own line. The same page in both modes:</p>
+<pre><code>plain:  '\n \neliminate\n \nand\n \nshrink\n \ntumors\n.\n \nBrachy-\n \nmeans\n ...'
+layout: 'tumors. Brachy- means short distance in Greek. It was first used in ...'</code></pre>
+<p>Whitespace made up 29.7% of the StatPearls chunks, compared with 15.1% after the rebuild. The text was also split page by page at 512 characters, and page headers and the reference list were indexed as content.</p>
+<h3>Fix</h3>
+<ul><li>Extract with pypdf's layout mode.</li><li>Remove page headers and footers, citation markers and the StatPearls reference list.</li><li>Split each document as one text, in 800-character chunks with 150 overlap.</li></ul>
+<div class="scroll"><table>
+<thead><tr><th>Index (new BM25)</th><th class="n">Chunks</th><th class="n">Hits / 52</th><th class="n">Context per question</th></tr></thead>
+<tbody>
+<tr><td>Original, 512</td><td class="n">249</td><td class="n">30</td><td class="n">3,772 chars</td></tr>
+<tr><td>Cleaned, 512</td><td class="n">187</td><td class="n">31</td><td class="n">3,388 chars</td></tr>
+<tr class="kept"><td>Cleaned, 800 (used)</td><td class="n">122</td><td class="n">34</td><td class="n">5,020 chars</td></tr>
+<tr><td>Cleaned, 1000</td><td class="n">91</td><td class="n">34</td><td class="n">6,227 chars</td></tr>
+<tr><td>Cleaned, 1200</td><td class="n">74</td><td class="n">34</td><td class="n">7,751 chars</td></tr>
+</tbody></table></div>
+<p>At the original chunk size, cleaning adds one hit. The rest of the gain comes with longer chunks, which give the model more text and make a hit easier. I also chose the chunk size on these same 52 questions, so 34 is likely optimistic.</p>
+<p>One example: asked which system emphasizes higher dose at the periphery, the model used to answer Quimby. It now answers Manchester, but adds that the central dose is hotter, which the source says about Quimby.</p>
+
+<h2 id="risks">4. Risk factor</h2>
+<h3>gpt-4o-mini will be shut down</h3>
+<p>OpenAI's <a href="https://developers.openai.com/api/docs/deprecations">deprecations page</a> lists <code>gpt-4o-mini-2024-07-18</code> with a shutdown date of January 14, 2027 (notice given October 14, 2026). It is one of the two LLMs evaluated in the paper. After that date the gpt-4o-mini results cannot be rerun.</p>
+
+<h2 id="limits">5. Not done yet</h2>
+<ul>
+<li>The full RAGAS evaluation has not been run on the new setup.</li>
+<li>Nothing has been tested on the Quest 3 headset.</li>
+<li>The timings come from one PC and few runs.</li>
+<li>One evaluation question, on the four primary QA endpoints, has no supporting passage that I could find in the two indexed documents, so a refusal there looks correct.</li>
+</ul>
+</main>
+<script>
+const out = document.getElementById('readout');
+document.querySelectorAll('.seg').forEach(s => {
+  s.setAttribute('role', 'img'); s.setAttribute('aria-label', s.dataset.tip);
+  for (const e of ['mouseenter', 'focus', 'click']) s.addEventListener(e, () => { out.textContent = s.dataset.tip; });
+});
+</script>
+</body>
+</html>
